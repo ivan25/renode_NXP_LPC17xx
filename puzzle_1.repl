@@ -1,0 +1,106 @@
+
+// https://github.com/renode/renode/blob/master/platforms/cpus/stm32f0.repl
+// FLASH.sct
+// startup_LPC177X_8x.s
+
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+    priorityMask: 0xF0
+    systickFrequency: 72000000
+    IRQ -> cpu@0
+
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m4"
+    nvic: nvic
+
+flash: Memory.MappedMemory @ sysbus 0x0
+    size: 0x00080000
+
+// ram interna, tra cui lo stack
+// l'offset di inizio della ram interna sarebbe questo ma deve essere allineato
+// iram: Memory.MappedMemory @ sysbus 0x10002200
+// la page size deve essere allineata, ma il valore vero sarebbe questo
+//    size: 0x0000de00
+iram: Memory.MappedMemory @ sysbus 0x10000000
+//    size: 0x0000D000
+    size: 0x0000E000
+
+// Qual'e' la posizione/dimensione corretta della ram?
+// Probabilmente la ram vera e propria e' la seconda, ma
+// quella effettivamente allocata e' la prima?
+// ram in base a ./Setup/FLASH.sct
+ram: Memory.MappedMemory @ sysbus 0xA1000000
+    size: 0x00400000
+
+// ram in base a ./Setup/IOINIT.C @ 25
+//ram: Memory.MappedMemory @ sysbus 0xA0000000
+//    size: 0x2000000
+
+// Framebuffer
+// crt.c
+/*fb0: Memory.MappedMemory @ sysbus 0xA1C00000
+    size: 0x200000
+
+fb1: Memory.MappedMemory @ sysbus 0xA1E00000
+    size: 0x200000
+
+fb2: Memory.MappedMemory @ sysbus 0xA1F00000
+    size: 0x200000
+*/
+
+timer0: Timers.NXP_LPC17xx_Timer @ sysbus 0x40004000
+    frequency: 72000000
+    
+timer1: Timers.NXP_LPC17xx_Timer @ sysbus 0x40008000
+    frequency: 72000000
+    
+timer2: Timers.NXP_LPC17xx_Timer @ sysbus 0x40090000
+    frequency: 72000000
+
+sysbus:
+    init:
+        // ApplySVD @/home/ivan/Scrivania/DEV/renode/ARMCM4.svd
+
+        // LPC_SC->SCS
+        // system_LPC407x_8x_177x_8x.c @ 535
+        // while ((LPC_SC->SCS & (1<<6)) == 0);/* Wait for Oscillator to be ready */
+        // 1 << 6 = 0x40 = 64
+        Tag <0x400FC1A0, 0x400FC1A8> "LPC_SC->SCS" 0x40
+        
+        // LPC_SC->PLL0STAT
+        // system_LPC407x_8x_177x_8x.c @ 545
+        // while (!(LPC_SC->PLL0STAT & (1<<10))); * Wait for PLOCK0 */
+        // (1 << 10 = 0x400 = 1024) | (0x100) = 0x500
+        // system_LPC407x_8x.c @ 334
+        Tag <0x400FC088, 0x400FC090> "LPC_SC->PLL0STAT" 0x500
+        
+        // LPC_SC->PLL1STAT
+        // system_LPC407x_8x_177x_8x.c @ 553
+        // while (!(LPC_SC->PLL1STAT & (1<<10)));/* Wait for PLOCK1 */
+        // 1 << 10 = 0x400 = 1024
+        Tag <0x400FC0A8, 0x400FC0B0> "LPC_SC->PLL1STAT" 0x400
+        
+        // LPC_SC->EMCCAL
+        // IOINIT.C @ _CalibrateOsc @ 183
+        // while ((v & (1 << 15)) == 0) { v = LPC_SC->EMCCAL; }
+        // 1 << 15 = 0x8000 = 32768
+        Tag <0x400FC1E0, 0x400FC1E4> "LPC_SC->EMCCAL" 0x8000
+        
+        // LPC_SC->CCLKSEL
+        // system_LPC407x_8x_177x_8x.c @ 556
+        // (0x00000001|(1<<8)) = 0x101
+        Tag <0x400FC104, 0x400FC108> "LPC_SC->CCLKSEL" 0x101
+        
+        // LPC_TIM0->TCR
+        // IOINIT.C
+        // while (LPC_TIM0->TCR & 1); // Wait until delay time has elapsed
+        // LPC_TIM0 = LPC_TIM0_BASE = LPC_APB0_BASE + 0x04000 
+        //          = 0x40000000 + 0x04000 = 0x40004000
+        // ->TCR = + 0x004
+        // LPC_TIM0->TCR = 0x40004000 + 0x004 = 0x40004004
+        // Tag <0x40004004, 0x40004008> "LPC_TIM0->TCR" 0
+
+        // Framebuffers
+        Tag <0xA1C00000, 0xA1DFFFFF> "FB0"
+        Tag <0xA1E00000, 0xA1FFFFFF> "FB1"
+        Tag <0xA2000000, 0xA21FFFFF> "FB2"
+

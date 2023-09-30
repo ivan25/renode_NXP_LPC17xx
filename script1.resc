@@ -1,0 +1,172 @@
+# s @/home/ivan/Scrivania/DEV/renode/script1.resc
+# renode "/home/ivan/Scrivania/DEV/renode/script1.resc; start"
+
+# ----------------------------------------------
+# Installa le periferiche custom
+include @/home/ivan/Scrivania/DEV/renode/peripherals/NXP_LPC17xx_Timer.cs
+EnsureTypeIsLoaded "Antmicro.Renode.Peripherals.Timers.NXP_LPC17xx_Timer"
+
+# cd ~/Scrivania/DEV/renode
+# /opt/gcc-arm-none-eabi-10.3/bin/arm-none-eabi-gdb BIOS.elf
+
+$BIOS_ELF=@/home/ivan/Scrivania/DEV/renode/BIOS.elf
+$BIOS_BIN=@/home/ivan/Scrivania/DEV/renode/BIOS.bin
+
+emulation SetSeed 0x1
+
+using sysbus
+mach create "PuzzleTest1"
+machine LoadPlatformDescription @/home/ivan/Scrivania/DEV/renode/puzzle_1.repl
+emulation SetGlobalSerialExecution True
+
+# https://renode.readthedocs.io/en/latest/advanced/execution-tracing.html
+# python3 /opt/renode/tools/metrics_analyzer/metrics_visualizer/metrics-visualizer.py metrics.dat
+#cpu EnableExecutionTracing @/home/ivan/Scrivania/DEV/renode/trace.txt PC
+machine EnableProfiler @/home/ivan/Scrivania/DEV/renode/metrics.dat
+# cpu SaveAllOpcodesCounters @/home/ivan/Scrivania/DEV/renode/opcode_counters.dat
+# cpu EnableProfiler Perfetto @/home/ivan/Scrivania/DEV/renode/profiling.dat true
+
+# Impostazioni per la visualizzazione
+cpu LogFunctionNames true
+sysbus LogAllPeripheralsAccess true
+
+logLevel 3
+
+# Avvia il server gdb con 
+# > /opt/gcc-arm-none-eabi-10.3/bin/arm-none-eabi-gdb BIOS.elf
+# e dare 
+# > target remote :3333 
+# per connettersi
+machine StartGdbServer 3333
+
+# ----------------------------------------------
+# Avvia la CPU
+
+cpu PerformanceInMips 125
+
+# sysbus.cpu ExecutionMode SingleStepBlocking
+sysbus.cpu ExecutionMode Continuous
+
+# Carica il bios in memoria
+sysbus LoadELF $BIOS_ELF
+#sysbus LoadBinary $BIOS_BIN 0x0
+
+# Resetta la cpu
+# All'avvio la cpu carica nello stack pointer il valore
+# presente in memoria all'indirizzo 0 e poi nel program 
+# counter il valore successivo
+# https://community.arm.com/arm-community-blogs/b/architectures-and-processors-blog/posts/decoding-the-startup-file-for-arm-cortex-m4
+# Questi due valori sono presi dall'elf con gdb (x/2w 0)
+sysbus.cpu SP 0x10009568
+sysbus.cpu PC 0x00000c81
+
+# Esempi di hook
+# cpu AddHook 0x1E "print 'You have reached a hook'"
+# cpu AddHook 0x11C8 "cpu.Pause()"
+
+# python "print self.Machine['sysbus'].ReadBytes(0x1e, 2)"
+# NOP-out l'istruzione a 0x1E
+# python "self.Machine['sysbus'].WriteBytes((0xE3, 0x20, 0xF0, 0x00), 0x1e)"
+# sysbus.cpu Step ; sysbus.cpu SP
+
+# Patcho il bios in modo da saltare la funzione _TestSDRAM
+# perche' sembra non terminare mai per qualche motivo
+# python "print self.Machine['sysbus'].ReadBytes(0x124e, 2)" -> Array[Byte]((220, 231))
+#python "self.Machine['sysbus'].WriteBytes((220, 230), 0x11D0)"
+
+# Anzi salto direttamente tutta la funzione _FindDelay
+#cpu AddHook 0x11C8 "self.Machine['sysbus'].SetPCOnAllCores(0x1234)"
+#cpu AddHook 0x11C8 """
+#print(dir(cpu))
+## cpu.SetRegisterUnsafe(15, 0x1234)
+#cpu.Pause()
+#"""
+
+# Elimino con delle NOP le chiamate alla funzione _FindDelay (trovate con objdump)
+# nop-out 0x103C (+4) e 0x1042 (+4)
+# python "self.Machine['sysbus'].WriteBytes((0xE3, 0x20, 0xF0, 0x00), 0x103C)"
+python "self.Machine['sysbus'].WriteBytes((0x00, 0xBF), 0x103C)"
+python "self.Machine['sysbus'].WriteBytes((0x00, 0xBF), 0x1042)"
+
+# Elimino con delle nop la chiamata __EMC_Init nel Reset_Handler
+python "self.Machine['sysbus'].WriteBytes((0x00, 0xBF), 0xCA0)"
+python "self.Machine['sysbus'].WriteBytes((0x00, 0xBF), 0xCA2)"
+###cpu AddHook 0xf82 "cpu.SetRegisterUnsafe(2, 10)"
+python "self.Machine['sysbus'].WriteBytes((0x00,), 0x10003904)"
+# Noppo la chiamata ad init_adc in main() che a sua volta
+# chiamerebbe tutte le funzioni per impostare e leggere il touch
+python "self.Machine['sysbus'].WriteBytes((0xE3, 0x20, 0xF0, 0x00), 0x593c)"
+
+# Breakpoints
+# bkp @ deltat
+#cpu AddHook 0xE0CC "cpu.Pause(); print('PAUSA\n')"
+# __EMC_Init
+#cpu AddHook 0xf78 "cpu.Pause()"
+# SwitchContext while(_TAB[(NTASK) & (MAX_TASK_NUMBER-1)].status != TASK_ACTIVE) 
+#cpu AddHook 0x7384 "cpu.Pause()"
+# cpu AddHook 0x7384 "self.Machine['sysbus'].WriteBytes((0x00), 0x10003904)" # errore machine non esiste su cpu
+# SwitchContext
+#cpu AddHook 0x7132 "cpu.Pause()"
+# delayUs
+#cpu AddHook 0xe136 "cpu.Pause()"
+# deltat
+#cpu AddHook 0xe076 "cpu.Pause()"
+# main() dopo delayUs(200)
+#cpu AddHook 0x592c "cpu.Pause()"
+# PendSV_Handler prima di bl SwitchContext
+#cpu AddHook 0xc24 "cpu.Pause()"
+# PendSV_Handler dopo di bl SwitchContext
+#cpu AddHook 0xc3c "cpu.Pause()"
+# SystemCoreClockUpdate
+#cpu AddHook `sysbus GetSymbolAddress "SystemCoreClockUpdate"` "cpu.Pause()"
+# init_reskedul
+#cpu AddHook `sysbus GetSymbolAddress "init_reskedul"` "cpu.Pause()"
+# main() bl init_reskedul
+#cpu AddHook 0x5938 "cpu.Pause()"
+# main() bl v_cls
+#cpu AddHook 0x5914 "cpu.Pause()"
+# main.c no_sd()
+cpu AddHook `sysbus GetSymbolAddress "no_sd"` "cpu.Pause(); print('BKPT no_sd\n')"
+#cpu AddHook 0x73B4 "cpu.Pause()"
+# HardFault_Handler
+cpu AddHook 0xC48 "print('HardFault_Handler'); cpu.Pause()"
+# malloc
+#cpu AddHook 0x31fa0 "cpu.Pause()"
+# init_adc
+#cpu AddHook 0x1e558 "cpu.Pause()"
+# main.c v_printf("Initialising ...\n");
+cpu AddHook 0x5a74 "cpu.Pause(); print('BKPT v_printf\n')"
+
+# Timerpoints
+# SwitchContext
+#cpu AddHook 0x7132 "mst = emulationManager.Instance.CurrentEmulation.MasterTimeSource; print('SwitchContext EVT {} EHT {}'.format(mst.ElapsedVirtualTime, mst.ElapsedHostTime))"
+
+# Watchpoints
+# SystemCoreClock
+#sysbus AddWatchpointHook `sysbus GetSymbolAddress "SystemCoreClock"` DoubleWord Write "print('SystemCoreClock WRITE val = {}'.format(value)); sysbus.GetCurrentCPU().Pause()"
+# _TAB[0].status
+#sysbus AddWatchpointHook 0x10003904 Word Read "print('_TAB[0].status READ val = {}\n'.format(value))"
+#sysbus AddWatchpointHook 0x10003904 Word Write "print('_TAB[0].status WRITE val = {}\n'.format(value))"
+# reskeduler_enabled
+#sysbus AddWatchpointHook `sysbus GetSymbolAddress "reskeduler_enabled"` DoubleWord Read "print('reskeduler_enabled READ val = {}'.format(value));"
+#sysbus AddWatchpointHook `sysbus GetSymbolAddress "reskeduler_enabled"` DoubleWord Write "print('reskeduler_enabled WRITE val = {}'.format(value));"
+
+#cpu GetRegistersValues
+# Stampa lo stack pointer
+#cpu GetRegisterUnsafe 28
+
+sysbus SetHookBeforePeripheralWrite timer2 """
+if offset == 0x18: 
+	print('Stop on MR0 Write val = {} offs = {}'.format(value, offset))
+	sysbus.GetCurrentCPU().Pause()
+"""
+
+echo "Script loaded."
+
+
+
+
+
+
+
+

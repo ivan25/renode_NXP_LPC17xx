@@ -1,0 +1,64 @@
+
+= Renode
+
+[source,bash]
+----
+docker run --rm -it --env DISPLAY=unix$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix antmicro/renode
+
+s @scripts/single-node/stm32f4_discovery.resc
+sysbus.cpu ExecutionMode SingleStep
+start
+sysbus.cpu PC
+sysbus FindSymbolAt `sysbus.cpu PC`
+cpu LogFunctionNames true
+sysbus LogAllPeripheralsAccess true
+sysbus.cpu Step
+gpioPortA.UserButton
+gpioPortA.UserButton Toggle
+gpioPortA.externalLed State
+----
+
+== Processo di boot del cortex
+
+1. La cpu si avvia con il PC a 0xC81, in Reset_Handler (./Setup/startup_LPC177x_8x.s)
+
+----
+Reset_Handler   PROC
+                EXPORT  Reset_Handler             [WEAK]
+                IMPORT  SystemInit
+                IMPORT  __low_level_init
+                IMPORT  __int_vectors_init
+                IMPORT  __SysTickInit
+                IMPORT  __EMC_Init
+                IMPORT  __Pin_Config
+                IMPORT  __main
+                LDR     R0, =0
+                LDR     R0, =1
+                LDR     R0, =2
+                LDR     R0, =3
+                LDR     R0, =4
+                LDR     R0, =SystemInit
+                BLX     R0
+                LDR     R0, =__low_level_init
+                BLX     R0
+                LDR     R0, =__Pin_Config
+                BLX     R0
+                LDR     R0, =__EMC_Init
+                BLX     R0
+                LDR     R0, =__initial_sp
+                MSR     PSP, R0		          ; PSP of main task at end of SRAM
+                LDR     R0, =2				  ; bit0=0  privileged in USER MODE  bit1=1  PSP in user mode
+                MSR     CONTROL, R0
+                LDR     R0, =__main
+                BX      R0
+                ENDP
+----
+
+Il Reset_Handler prima esegue la funzione SystemInit (./Setup/system_LPC177X_8x.c)
+che si occupa principalmente di impostare i segnali di clock e di aspettare che
+siano andati a regime prima di continuare.
+
+Successivamente viene chiamata \__low_level_init (./Setup/IOINIT.C) che
+come unica cosa chiama la funzione SystemCoreClockUpdate (./Setup/system_LPC177X_8x.c), che
+a sua volta legge i registri della cpu (ad es LPC_SC->CCLKSEL ecc) e determina la frequenza
+di clock (impostando le variabili SystemCoreClock, PeripheralClock ecc)
